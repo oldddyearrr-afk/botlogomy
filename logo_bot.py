@@ -5,7 +5,7 @@ import threading
 import time
 
 # --- الإعدادات ---
-TOKEN = 'ضع_هنا_توكن_البوت_الخاص_بك' 
+TOKEN = '8412705275:AAEkLb2IMAufEoM3qczKTCFx4_6HB7NWYuw' 
 bot = telebot.TeleBot(TOKEN)
 
 # تحديد مسار اللوجو الثابت (سيتم تحميله مرة واحدة ويبقى دائماً)
