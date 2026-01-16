@@ -2,95 +2,139 @@ import os
 import telebot
 import subprocess
 import threading
-import time
+import json
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# --- الإعدادات ---
-TOKEN = '5695967870:AAF2TdnzyGy279W4FCeKmObpQSXJgpjXIb4' 
+# --- الإعدادات الأساسية ---
+TOKEN = '8412705275:AAF3YfkURUCObv6iFavAe3fQI1Id81JihPs'
 bot = telebot.TeleBot(TOKEN)
+LOGO_PATH = "logo.png"
+CONFIG_FILE = "settings.json"
 
-# تحديد مسار اللوجو الثابت (سيتم تحميله مرة واحدة ويبقى دائماً)
-LOGO_PATH = os.path.join(os.getcwd(), 'logo.png')
+# --- تحميل الإعدادات أو إنشاؤها (التحميل لمرة واحدة) ---
+if os.path.exists(CONFIG_FILE):
+    with open(CONFIG_FILE, 'r') as f:
+        settings = json.load(f)
+else:
+    # إعدادات افتراضية بناءً على طلبك (أسفل يسار مع إزاحة 50 بكسل)
+    settings = {
+        "size": "200", 
+        "opacity": "1.0",
+        "x_offset": "50",
+        "y_offset": "50"
+    }
 
-# دالة معالجة الفيديو وإضافة اللوجو
-def process_video_complete(message, input_path):
-    # اسم ملف المخرج
-    output_path = f"out_{message.video.file_id}.mp4"
-    
-    # التأكد من وجود اللوجو في المسار المحدد
-    if not os.path.exists(LOGO_PATH):
-        bot.reply_to(message, "❌ خطأ تقني: ملف logo.png غير موجود في السيرفر. أرجوك ارفعه أولاً.")
-        return
+def save_settings():
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(settings, f)
 
-    # أمر FFmpeg الاحترافي:
-    # -threads 1: لضمان عدم استهلاك الرام بالكامل (مناسب لـ 512MB)
-    # overlay=60:H-h-60: لوضع اللوجو في اليسار تحت مع مسافة أمان (مثل صورتك)
-    # -preset ultrafast: لأسرع معالجة ممكنة لتقليل الضغط على السيرفر
-    # -crf 26: للحفاظ على جودة 1080p بوزن ملف مناسب
-    ffmpeg_cmd = [
-        'ffmpeg',
-        '-threads', '1',
-        '-i', input_path,
-        '-i', LOGO_PATH,
-        '-filter_complex', '[0:v][1:v]overlay=60:H-h-60',
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-crf', '26',
-        '-c:a', 'copy', # نسخ الصوت الأصلي بدون إعادة معالجة لتوفير الوقت
-        '-y', output_path
-    ]
+# --- 1. خادم وهمي بسيط لإرضاء Render ومنع التوقف ---
+class SimpleServer(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is Running - High Performance Mode")
 
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), SimpleServer)
+    print(f"🌐 Dummy Server running on port {port}")
+    server.serve_forever()
+
+# --- 2. أوامر التحكم الديناميكي ---
+@bot.message_handler(commands=['start', 'settings'])
+def show_settings(message):
+    text = (f"⚙️ **إعدادات اللوجو الحالية:**\n\n"
+            f"📏 الحجم: `{settings['size']}px`\n"
+            f"✨ الشفافية: `{settings['opacity']}`\n"
+            f"📍 الإزاحة من اليسار: `{settings['x_offset']}px`\n"
+            f"📍 الرفع من الأسفل: `{settings['y_offset']}px`\n\n"
+            f"🛠 **أوامر التحكم:**\n"
+            f"• لتغيير الحجم: `/size 150`\n"
+            f"• لتغيير الشفافية: `/opacity 0.7`\n"
+            f"• للتحريك (يمين ثم أعلى): `/move 60 60`\n"
+            f"• فقط أرسل الفيديو ليتم المعالجة فوراً.")
+    bot.reply_to(message, text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['size'])
+def set_size(message):
     try:
-        # إرسال رسالة انتظار للمستخدم
-        msg = bot.send_message(message.chat.id, "🎬 جاري معالجة الفيديو بدقة 1080p...\nيرجى الانتظار، هذه العملية تعتمد على حجم المقطع.")
-        
-        # تشغيل عملية المعالجة
-        subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        # إرسال الفيديو الناتج مع حقوق قناتك
-        with open(output_path, 'rb') as v:
-            bot.send_video(
-                message.chat.id, 
-                v, 
-                caption="✅ تم إضافة اللوجو بنجاح\n\n🆔 @RealMadridNews18",
-                supports_streaming=True
-            )
-        
-        # حذف رسالة الانتظار
-        bot.delete_message(message.chat.id, msg.message_id)
-        
-    except Exception as e:
-        bot.reply_to(message, f"❌ حدث خطأ أثناء المعالجة: {e}\nنصيحة: جرب مقطعاً أقصر إذا كان السيرفر ينهار.")
-    
-    finally:
-        # تنظيف الملفات المؤقتة فوراً للحفاظ على مساحة السيرفر
-        if os.path.exists(input_path): os.remove(input_path)
-        if os.path.exists(output_path): os.remove(output_path)
+        val = message.text.split()[1]
+        settings['size'] = val
+        save_settings()
+        bot.reply_to(message, f"✅ تم ضبط الحجم إلى {val} بكسل.")
+    except: bot.reply_to(message, "⚠️ مثال: `/size 200`")
 
-# استقبال الفيديوهات من المستخدم
+@bot.message_handler(commands=['opacity'])
+def set_opacity(message):
+    try:
+        val = message.text.split()[1]
+        settings['opacity'] = val
+        save_settings()
+        bot.reply_to(message, f"✅ تم ضبط الشفافية إلى {val}.")
+    except: bot.reply_to(message, "⚠️ مثال: `/opacity 0.8` (من 0.1 إلى 1.0)")
+
+@bot.message_handler(commands=['move'])
+def set_move(message):
+    try:
+        parts = message.text.split()
+        settings['x_offset'] = parts[1]
+        settings['y_offset'] = parts[2]
+        save_settings()
+        bot.reply_to(message, f"✅ تم تحريك اللوجو: {parts[1]} لليمين و {parts[2]} للأعلى.")
+    except: bot.reply_to(message, "⚠️ مثال: `/move 50 50`")
+
+# --- 3. محرك المعالجة السريع ---
+def get_overlay_filter():
+    # الإحداثيات بناءً على طلبك: من اليسار x ومن الأسفل y
+    x = settings['x_offset']
+    y = settings['y_offset']
+    coords = f"{x}:main_h-overlay_h-{y}"
+    return f"[1:v]scale={settings['size']}:-1,format=argb,colorchannelmixer=aa={settings['opacity']}[logo];[0:v][logo]overlay={coords}"
+
 @bot.message_handler(content_types=['video'])
 def handle_video(message):
-    bot.reply_to(message, "📥 استلمت الفيديو، جاري التحميل لبدء دمج الشعار...")
+    input_file = f"in_{message.message_id}.mp4"
+    output_file = f"out_{message.message_id}.mp4"
     
     try:
-        # تحميل الملف من سحابة تلجرام إلى السيرفر
+        msg = bot.reply_to(message, "📥 استلمت الفيديو، جاري التحميل...")
+        
         file_info = bot.get_file(message.video.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        
-        input_path = f"in_{message.video.file_id}.mp4"
-        with open(input_path, 'wb') as f:
+        with open(input_file, 'wb') as f:
             f.write(downloaded_file)
+            
+        bot.edit_message_text("🎬 جاري معالجة الفيديو بدقة أصلية...\nيرجى الانتظار، جاري دمج الشعار.", 
+                              chat_id=message.chat.id, message_id=msg.message_id)
+
+        # دمج اللوجو مع نسخ الصوت (سرعة قصوى)
+        cmd = [
+            'ffmpeg', '-y', '-i', input_file, '-i', LOGO_PATH,
+            '-filter_complex', get_overlay_filter(),
+            '-c:a', 'copy', '-preset', 'ultrafast', output_file
+        ]
         
-        # تشغيل المعالجة في خيط منفصل لكي لا يتوقف البوت عن الاستجابة
-        t = threading.Thread(target=process_video_complete, args=(message, input_path))
-        t.start()
-        
+        subprocess.run(cmd, check=True)
+
+        with open(output_file, 'rb') as video:
+            bot.send_video(message.chat.id, video, caption="✅ تم دمج الشعار بنجاح!")
+            
+        # تنظيف
+        if os.path.exists(input_file): os.remove(input_file)
+        if os.path.exists(output_file): os.remove(output_file)
+        bot.delete_message(message.chat.id, msg.message_id)
+
     except Exception as e:
-        bot.reply_to(message, f"❌ فشل تحميل الملف: {e}")
+        bot.send_message(message.chat.id, f"❌ حدث خطأ: {str(e)}")
+        if os.path.exists(input_file): os.remove(input_file)
+        if os.path.exists(output_file): os.remove(output_file)
 
-# رسالة الترحيب
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    bot.reply_to(message, "مرحباً بك في بوت إضافة الحقوق! 🎥\n\nأرسل لي أي فيديو وسأقوم بوضع شعار قناتك في الزاوية اليسرى السفلية بدقة 1080p.")
-
-print("🚀 Bot is Online and Ready!")
-bot.polling(non_stop=True)
+# --- التشغيل النهائي ---
+if __name__ == "__main__":
+    # تشغيل الخادم الوهمي في خلفية الكود
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+    
+    # تحميل اللوجو المسبق: البوت يحتفظ باللوجو والإعدادات في الذاكرة
+    print("🚀 Bot is Online with Dynamic Settings!")
+    bot.polling(non_stop=True)
